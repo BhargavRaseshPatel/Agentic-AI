@@ -2,6 +2,7 @@ import express from "express"
 import dotenv from "dotenv"
 import cors from "cors"
 import { ChatGoogle } from "@langchain/google";
+import { ChatGroq } from "@langchain/groq"
 
 dotenv.config()
 
@@ -19,13 +20,16 @@ app.post("/chat", async (req, res) => {
     // console.log("yes")
     const { prompt } = req.body;
 
-    const model = new ChatGoogle({"model":"gemini-2.5-flash"});
+    const model = new ChatGroq({"model":"openai/gpt-oss-120b"});
     // const result = await model.invoke(prompt)
 
     const result = await model.invoke([
         {
             role : "system",
             content : "you are jarvis and my assistant"
+        },{
+            role: "human",
+            content : prompt
         }
         ])
 
