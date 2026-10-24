@@ -1,7 +1,7 @@
 import express from "express"
 import dotenv from "dotenv"
-import { Groq } from 'groq-sdk';
 import cors from "cors"
+import { ChatGoogle } from "@langchain/google";
 
 dotenv.config()
 
@@ -12,41 +12,26 @@ const PORT = process.env.PORT || 3000
 app.use(express.json())
 app.use(cors())
 
-const main = async (text) => {
-    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+// langchain
 
-    const chatCompletion = await groq.chat.completions.create({
-        "messages": [
-            {
-                "role": "user",
-                "content": text ?? 'How are you ?'
-            }
-        ],
-        "model": "openai/gpt-oss-20b",
-        "temperature": 1,
-        "max_completion_tokens": 2048,
-        "top_p": 1,
-        "stream": true,
-        "reasoning_effort": "medium",
-        "stop": null
-    });
 
-    // return chatCompletion
-
-    for await (const chunk of chatCompletion) {
-        process.stdout.write(chunk.choices[0]?.delta?.content || '');
-    }
-
-}
-
-main();
-
-app.post("/chat", async(req, res) => {
+app.post("/chat", async (req, res) => {
+    // console.log("yes")
     const { prompt } = req.body;
 
-    // await main(prompt)
+    const model = new ChatGoogle({"model":"gemini-2.5-flash"});
+    // const result = await model.invoke(prompt)
 
-    // return null
+    const result = await model.invoke([
+        {
+            role : "system",
+            content : "you are jarvis and my assistant"
+        }
+        ])
+
+
+    return res.json(result.content)
+
 })
 
 app.get("/", (req, res) => {
