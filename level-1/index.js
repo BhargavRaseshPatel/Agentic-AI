@@ -1,45 +1,58 @@
 import express from "express"
 import dotenv from "dotenv"
-import { GoogleGenAI } from "@google/genai";
+import { Groq } from 'groq-sdk';
+import cors from "cors"
 
 dotenv.config()
 
 const app = express()
 
-const PORT = process.env.PORT || 5000
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const PORT = process.env.PORT || 3000
 
 app.use(express.json())
+app.use(cors())
 
-async function main() {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: "Explain how AI works in a few words",
-      });
+const main = async (text) => {
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-    console.log(response.text);
+    const chatCompletion = await groq.chat.completions.create({
+        "messages": [
+            {
+                "role": "user",
+                "content": text ?? 'How are you ?'
+            }
+        ],
+        "model": "openai/gpt-oss-20b",
+        "temperature": 1,
+        "max_completion_tokens": 2048,
+        "top_p": 1,
+        "stream": true,
+        "reasoning_effort": "medium",
+        "stop": null
+    });
 
-    // Stream response ------
-    // const responseStream = await ai.models.generateContentStream({
-    //     model: "gemini-3.8-flash",
-    //     contents: "Explain how AI works in a few words",
-    // })
+    // return chatCompletion
 
-    // for await (const chunk of responseStream) {
-    //     process.stdout.write(chunk.text);
-    // }
+    for await (const chunk of chatCompletion) {
+        process.stdout.write(chunk.choices[0]?.delta?.content || '');
+    }
 
 }
 
-// main();
+main();
 
-app.post("/chat", (req, res) => {
-    const {prompt } = req.body;
+app.post("/chat", async(req, res) => {
+    const { prompt } = req.body;
 
-    const result = await ai.models.generateContent({
-        model : ""
-    })
+    // await main(prompt)
+
+    // return null
 })
+
+app.get("/", (req, res) => {
+    res.status(200).json({
+        message: "GET request successful"
+    });
+});
 
 app.listen(PORT, () => console.log("Server started at " + PORT))
