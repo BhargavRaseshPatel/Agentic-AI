@@ -1,14 +1,12 @@
-import express from "express"
-import dotenv from "dotenv"
-import cors from "cors"
 import { ChatGoogle } from "@langchain/google";
-import { ChatGroq } from "@langchain/groq"
-import { TavilySearch } from "@langchain/tavily";
-import { context, createAgent, HumanMessage, tool } from 'langchain'
-import { z } from 'zod'
-import { ToolNode } from '@langchain/langgraph/prebuilt'
-import { MessagesAnnotation, StateGraph, MemorySaver } from "@langchain/langgraph";
-
+import { Command, interrupt, StateGraph, StateSchema } from "@langchain/langgraph";
+import { MongoDBSaver } from "@langchain/langgraph-checkpoint-mongodb";
+import cors from "cors";
+import dotenv from "dotenv";
+import express from "express";
+import { MongoClient } from "mongodb";
+import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 dotenv.config()
 
 const app = express()
@@ -17,88 +15,134 @@ const PORT = process.env.PORT || 3000
 app.use(express.json())
 app.use(cors())
 
-// tavily search
-// const tool1 = new TavilySearch({
-//     topic: "general"
-// })
+// const checkpointer = new MemorySaver()
 
-const checkpointer = new MemorySaver()
+const client = new MongoClient(process.env.MONGODB_URL)
+const checkpointer = new MongoDBSaver({ client });
 
-const tool1 = tool(({ email, content }) => {
-    return `email sent successfully to ${email} with content ${content}`
-},
-    {
-        name: "email_send_tool",
-        description: "use this tool to send email",
-        schema: z.object({
-            email: z.string().describe("sender email"),
-            content: z.string().describe("mail content for sending")
-        })
-    }
-)
 
-// custom search
-const tool2 = tool(({ a, b }) => {
-    return `addition of ${a} & ${b} is ${a + b}`
-}, {
-    name: "addition_tool",
-    description: "use this tool for addition for two numbers",
-    schema: z.object({
-        a: z.number(),
-        b: z.number()
-    })
+const customState = new StateSchema({
+    prompt: z.string(),
+    approvalRequires: z.boolean(),
+    aiResponse: z.string(),
+    approved: z.boolean(),
+    result: z.string().optional()
 })
 
-const tools = [tool1, tool2]
-const model = new ChatGoogle("gemini-3.1-pro-preview").bindTools(tools);
-
-const toolNode = new ToolNode(tools);
+const model = new ChatGoogle("gemini-3.1-pro-preview")
 
 const agent = async (state) => {
-    const result = await model.invoke(state.messages)
+    const result = await model.invoke([
+        {
+            role: "system",
+            content: `You are a helpful assisstant.
+            
+            If the user is greeting or asking a normal question,
+            respond normally and set approvalRequires to false.
+            
+            If the request requires a sensitive external action, 
+            such as sending an email or deleting a file, 
+            set approvalRequires to true.
+            
+            Return JSON with:
+            {
+                "response" : "your response",
+                "approvalRequires" : true or false
+            }`
+        },
+        {
+            role: "human",
+            content: state.prompt
+        }
+    ])
+
+    const parsed = JSON.parse(result.content)
 
     return {
-        messages : [result]
+        aiResponse: parsed.response,
+        approvalRequires: parsed.approvalRequires
     }
 }
 
-const shouldContinue = (state) => {
 
-    if(state.messages[state.messages.length-1].tool_calls?.length > 0){
-        return "tool_node"
-    } else {
-        return "__end__"
+const approvalNode = async (state) => {
+    const answer = interrupt({
+        message: "Do you approve this action ?",
+        prompt: state.prompt,
+        aiResponse: state.aiResponse
+    })
+
+    return {
+        approved: String(answer).trim().toLowerCase() === "yes"
     }
 }
 
-const graph = new StateGraph(MessagesAnnotation)
+const actionNode = async (state) => {
+    if (state.approved) {
+        return {
+            result: `action approved`
+        }
+    }
+
+    return {
+        result: "action reject by human"
+    }
+}
+
+const shouldContinue = async (state) => {
+    if (state.approvalRequires) {
+        return "approval"
+    }
+    return "__end__"
+}
+
+const graph = new StateGraph(customState)
     .addNode("agent", agent)
-    .addNode("tool_node", toolNode)
+    .addNode("approval", approvalNode)
+    .addNode("action", actionNode)
     .addEdge("__start__", "agent")
-    .addConditionalEdges("agent",shouldContinue)
-    .addEdge("tool_node","agent")
-    .compile({checkpointer})
+    .addConditionalEdges("agent", shouldContinue)
+    .addEdge("approval", "action")
+    .addEdge("action", "__end__")
+    .compile({ checkpointer })
+
 
 app.post("/chat", async (req, res) => {
     const { prompt } = req.body;
+    const thread_id = randomUUID();
+
     const result = await graph.invoke({
-        messages : [
-            {
-                role : "user",
-                content : prompt
-            }
-        ]
-    }, 
-    {
-        configurable: {thread_id : "user_123"}
-    }
-)
-    
+        prompt
+    },
+        {
+            configurable: { thread_id: thread_id }
+        }
+    )
     console.log(result.messages)
-    return res.json(result.messages[result.messages.length-1].content)
+    return res.json({
+        threadId: thread_id,
+        result: result.result,
+        ai: result.aiResponse
+    })
 })
 
-    
+
+app.post("/chat/resume", async (req, res) => {
+    const { threadId, answer } = req.body;
+
+    const result = await graph.invoke(
+        new Command({
+            resume: String(answer)
+        }),
+        {
+            configurable: { thread_id: threadId }
+        }
+    )
+
+    // console.log(result)
+    return res.json({ threadId, result: result.result })
+})
+
 app.get("/", (req, res) => {
     res.status(200).json({
         message: "GET request successful"
