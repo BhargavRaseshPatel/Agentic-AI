@@ -4,8 +4,10 @@ import cors from "cors"
 import { ChatGoogle } from "@langchain/google";
 import { ChatGroq } from "@langchain/groq"
 import { TavilySearch } from "@langchain/tavily";
-import { createAgent, tool } from 'langchain'
+import { context, createAgent, HumanMessage, tool } from 'langchain'
 import { z } from 'zod'
+import { ToolNode } from '@langchain/langgraph/prebuilt'
+import { MessagesAnnotation, StateGraph } from "@langchain/langgraph";
 
 dotenv.config()
 
@@ -25,7 +27,7 @@ const tool1 = tool(({ email, content }) => {
 },
     {
         name: "email_send_tool",
-        description: "use this took to send email",
+        description: "use this tool to send email",
         schema: z.object({
             email: z.string().describe("sender email"),
             content: z.string().describe("mail content for sending")
@@ -45,31 +47,52 @@ const tool2 = tool(({ a, b }) => {
     })
 })
 
-const model = new ChatGoogle("gemini-3.1-pro-preview");
+const tools = [tool1, tool2]
+const model = new ChatGoogle("gemini-3.1-pro-preview").bindTools(tools);
+
+const toolNode = new ToolNode(tools);
+
+const agent = async (state) => {
+    const result = await model.invoke(state.messages)
+
+    return {
+        messages : [result]
+    }
+}
+
+const shouldContinue = (state) => {
+
+    if(state.messages[state.messages.length-1].tool_calls?.length > 0){
+        return "tool_node"
+    } else {
+        return "__end__"
+    }
+}
+
+
 app.post("/chat", async (req, res) => {
     const { prompt } = req.body;
-    const agent = createAgent({
-        model,
-        tools: [tool1, tool2]
-    })
-
-    const result = await agent.invoke({
-        messages: [
+    const result = await graph.invoke({
+        messages : [
             {
-                role: "user",
-                content: prompt
-            },
-
+                role : "user",
+                content : prompt
+            }
         ]
     })
-
-    // console.log(result.messages)
-
-    console.log(result.messages[result.messages.length - 1].content)
-
-    return res.json("successfull")
+    
+    console.log(result.messages)
+    return res.json(result.messages[result.messages.length-1].content)
 })
 
+const graph = new StateGraph(MessagesAnnotation)
+    .addNode("agent", agent)
+    .addNode("tool_node", toolNode)
+    .addEdge("__start__", "agent")
+    .addConditionalEdges("agent",shouldContinue)
+    .addEdge("tool_node","agent")
+    .compile()
+    
 app.get("/", (req, res) => {
     res.status(200).json({
         message: "GET request successful"
