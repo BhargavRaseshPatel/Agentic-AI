@@ -4,7 +4,6 @@ import cors from "cors"
 import { ChatGroq } from "@langchain/groq"
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { type } from "node:os";
 
 dotenv.config()
 

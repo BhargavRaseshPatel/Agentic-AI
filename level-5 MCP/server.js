@@ -10,7 +10,7 @@ const server = new McpServer({
 server.registerTool(
     "addition",
     {
-        descriwhption : "for adding two numbers",
+        description : "for adding two numbers",
         inputSchema: z.object({
             a : z.number(),
             b : z.number()
